@@ -1,4 +1,5 @@
 ﻿using System.Threading.Channels;
+using libplctag.DataTypes.Simple;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -6,7 +7,7 @@ using MQTTnet;
 using MQTTnet.Client;
 using MQTTnet.Protocol;
 
-namespace Derail.MQTT;
+namespace Derail.EIP;
 
 public class ClientService: IHostedService
    {
@@ -16,8 +17,8 @@ public class ClientService: IHostedService
       private readonly IHostApplicationLifetime _appLifetime;
       private ChannelWriter<SystemControlFrame> _channelControlWriter;
       private ChannelWriter<SystemMessageFrame> _channelMessageWriter;
-      
-      private IMqttClient? _client;
+
+      private List<libplctag.ITag> _tagCache = new();
       
       private Task _task1;
       private CancellationTokenSource _tokenSource1;
@@ -50,15 +51,26 @@ public class ClientService: IHostedService
             {
                try
                {
-                  if(_serviceOptions.Enabled)
-                     await ConnectToBroker();
-                  
-                  while (!_token1.IsCancellationRequested)
+                  if (_serviceOptions.Enabled)
                   {
-                     await Task.Yield();
+                     CreateTags();
                   }
 
-                  await DisconnectFromBroker();
+                  while (!_token1.IsCancellationRequested)
+                  {
+                     if (_serviceOptions.Enabled)
+                     {
+                        await ReadTagsAsync();
+                     }
+                     
+                     await Task.Delay(_serviceOptions.ReadInterval);
+                  }
+                  
+                  if (_serviceOptions.Enabled)
+                  {
+                     DestroyTags();
+                  }
+
                }
                catch (Exception ex)
                {
@@ -87,12 +99,6 @@ public class ClientService: IHostedService
          return Task.CompletedTask;
       }
 
-      /*private async Task ProcessInboundFrame(ClientServiceInboundChannelFrame frame)
-      {
-         Console.WriteLine(frame.Type);
-         
-      }*/
-
       private async Task WriteOutboundControlFrame(string @event, dynamic? data = null)
       {
          _logger.LogDebug($"Write Frame: CONTROL/{@event}");
@@ -112,91 +118,53 @@ public class ClientService: IHostedService
             Payload = payload
          });
       }
-      
-      private async Task ConnectToBroker()
+
+      private void CreateTags()
       {
-         _client = new MqttFactory().CreateMqttClient();
-         _client.DisconnectedAsync += ClientOnDisconnectedAsync;
-         _client.ApplicationMessageReceivedAsync += OnClientOnApplicationMessageReceivedAsync;
-        
-         var mqttClientOptions = new MqttClientOptionsBuilder()
-            .WithTcpServer(_serviceOptions.BrokerAddress, _serviceOptions.BrokerPort)
-            .Build();
-         
-         try
+         foreach (var tag in _serviceOptions.Tags)
          {
-            await WriteOutboundControlFrame("CONNECTING");
-            var response = await _client.ConnectAsync(mqttClientOptions, CancellationToken.None);
-            if (response.ResultCode == MqttClientConnectResultCode.Success)
+            Type mapperType = Type.GetType($"libplctag.DataTypes.Simple.{tag.Mapper}, libplctag");
+            
+            if (mapperType == null)
             {
-               var mqttSubscribeOptionsBuilder = new MqttFactory().CreateSubscribeOptionsBuilder();
-               foreach (var subscriptionTopic in _serviceOptions.SubscriptionTopics)
+               _logger.LogWarning($"Tag mapper class '{tag.Mapper}' not found for tag '{tag.Name}'.");
+            }
+            else
+            {
+               var mapperInstance = Activator.CreateInstance(mapperType) as libplctag.ITag;
+               if (mapperInstance == null)
                {
-                  mqttSubscribeOptionsBuilder.WithTopicFilter(subscriptionTopic, MqttQualityOfServiceLevel.AtMostOnce);
+                  _logger.LogWarning($"Failed to activate tag mapper class '{tag.Mapper}' for tag '{tag.Name}'.");
+                  continue;
                }
-               var mqttSubscribeOptions = mqttSubscribeOptionsBuilder.Build();
-                  
-               await _client.SubscribeAsync(mqttSubscribeOptions, CancellationToken.None);
-               await WriteOutboundControlFrame("CONNECTED");
+               
+               mapperInstance.Name = tag.Name;
+               mapperInstance.Gateway = _serviceOptions.Gateway;
+               mapperInstance.Path = _serviceOptions.Path;
+               mapperInstance.PlcType = _serviceOptions.PlcType;
+               mapperInstance.Protocol = _serviceOptions.Protocol;
+               mapperInstance.Timeout = _serviceOptions.Timeout;
+               _tagCache.Add(mapperInstance);
             }
          }
-         catch (Exception e)
-         {
-            
-         }
-      }
-
-      private async Task DisconnectFromBroker()
-      {
-         if (_client != null)
-         {
-            await WriteOutboundControlFrame("DISCONNECTING");
-            _client.DisconnectedAsync -= ClientOnDisconnectedAsync;
-            await _client.DisconnectAsync();
-         }
-
-         await WriteOutboundControlFrame("DISCONNECTED");
-      }
-
-      private async Task ClientOnDisconnectedAsync(MqttClientDisconnectedEventArgs arg)
-      {
-         await WriteOutboundControlFrame("DISCONNECTED");
-         await Task.Delay(_serviceOptions.ReconnectInterval);
-         await ConnectToBroker();
       }
       
-      private async Task OnClientOnApplicationMessageReceivedAsync(MqttApplicationMessageReceivedEventArgs arg)
+      private async Task ReadTagsAsync()
       {
-         var payloadString = arg.ApplicationMessage.ConvertPayloadToString();
-         await WriteOutboundMessageFrame(new { arg.ApplicationMessage.Topic, arg.ApplicationMessage.PayloadSegment });
+         foreach (var tag in _tagCache)
+         {
+            // TODO: try-catch
+            var tagResponse = await tag.ReadAsync();
+            await WriteOutboundMessageFrame(new { Tag = tag.Name, Value = tagResponse });
+         }
+      }
+
+      private void DestroyTags()
+      {
+         foreach (var tag in _tagCache)
+         {
+            tag.Dispose();
+         }
       }
    }
    
-/*_task1 = Task.Run(async () =>
-{
-   try
-   {
-      while (await _channelReader.WaitToReadAsync(_token1))
-      {
-         await foreach (var frame in _channelReader.ReadAllAsync(_token1))
-         {
-            await ProcessInboundFrame(frame);
-         }
-      }
-   }
-   catch (OperationCanceledException ocex)
-   {
-      Console.WriteLine("MQTT.ClientService MQTT.CHANNEL_READER Cancelled");
-   }
-   catch (Exception ex)
-   {
-      Console.WriteLine("MQTT.ClientService MQTT.CHANNEL_READER ERROR");
-      Console.WriteLine(ex);
-   }
-   finally
-   {
-      Console.WriteLine("MQTT.ClientService MQTT.CHANNEL_READER Stopping");
-      _appLifetime.StopApplication();
-   }
-}, _token1);
-*/

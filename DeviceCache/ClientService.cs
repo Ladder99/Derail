@@ -1,11 +1,17 @@
-﻿using System.Threading.Channels;
+﻿using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading.Channels;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 
 namespace Derail.DeviceCache;
 
 public class ClientService: IHostedService
    {
       private readonly IHostApplicationLifetime _appLifetime;
+      private readonly ILogger<ClientService> _logger;
       private ChannelReader<SystemMessageFrame> _channelMessageReader;
       
       private Task _task1;
@@ -14,9 +20,11 @@ public class ClientService: IHostedService
       
       public ClientService(
          IHostApplicationLifetime appLifetime,
+         ILogger<ClientService> logger,
          ChannelReader<SystemMessageFrame> channelMessageReader)
       {
          _appLifetime = appLifetime;
+         _logger = logger;
          _channelMessageReader = channelMessageReader;
       }
       
@@ -41,16 +49,15 @@ public class ClientService: IHostedService
                }
                catch (OperationCanceledException ocex)
                {
-                  Console.WriteLine("DeviceService.ClientService MQTT.CHANNEL_READER Cancelled");
+                  _logger.LogWarning("CHANNEL_READER Cancelled");
                }
                catch (Exception ex)
                {
-                  Console.WriteLine("DeviceService.ClientService MQTT.CHANNEL_READER ERROR");
-                  Console.WriteLine(ex);
+                  _logger.LogError(ex, "CHANNEL_READER ERROR");
                }
                finally
                {
-                  Console.WriteLine("DeviceService.ClientService MQTT.CHANNEL_READER Stopping");
+                  _logger.LogInformation("CHANNEL_READER Stopping");
                   _appLifetime.StopApplication();
                }
             }, _token1);
@@ -61,7 +68,7 @@ public class ClientService: IHostedService
 
       public Task StopAsync(CancellationToken cancellationToken)
       {
-         Console.WriteLine("DeviceService.ClientService Stop");
+         _logger.LogInformation("Stop");
          
          _tokenSource1.Cancel();
          Task.WaitAll(_task1);
@@ -70,8 +77,17 @@ public class ClientService: IHostedService
       }
 
       private async Task ProcessInboundFrame(SystemMessageFrame frame)
-      {
-         Console.WriteLine($"DeviceService Receive Frame: {frame.SourceInstanceId} = {frame.Payload}");
-
+      { 
+         Console.WriteLine($"DeviceService Receive Frame: [{frame.TimestampCreated},{frame.SourceInstanceId}] {frame.Payload}");
+         
+        /*
+         var client = new UdpClient();
+         IPEndPoint ep = new IPEndPoint(IPAddress.Parse("127.0.0.1"), 9870);
+         client.Connect(ep);
+         //var ps = Encoding.UTF8.GetString(frame.Payload.PayloadSegment);
+         //var jj = JsonConvert.SerializeObject(frame.Payload.PayloadSegment);
+         //Console.WriteLine(ps);
+         await client.SendAsync(frame.Payload.PayloadSegment.Array);
+         */
       }
    }

@@ -1,10 +1,16 @@
-﻿namespace Derail;
+﻿
 
-using System;
 using System.Threading.Channels;
-using System.Threading.Tasks;
+using IronPython.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using NLog.Extensions.Logging;
+using libplctag;
+using Microsoft.Scripting;
+using Microsoft.Scripting.Hosting;
+
+namespace Derail;
 
 class Program
 {
@@ -13,10 +19,36 @@ class Program
         await Host.CreateDefaultBuilder(args)
             .ConfigureServices((hostContext, services) =>
             {
+                
+                // EIP.ClientService -> bunker-micro
+                
+                services.Configure<EIP.ClientServiceOptions>("bunker-micro", o =>
+                {
+                    o.Name = "bunker-micro";
+                    o.Enabled = false;
+                    o.Gateway = "192.168.111.20";
+                    o.Protocol = Protocol.ab_eip;
+                    o.PlcType = PlcType.MicroLogix;
+                    o.Timeout = TimeSpan.FromMilliseconds(5000);
+                    o.ReadInterval = TimeSpan.FromMilliseconds(1000);
+                    o.Tags = new()
+                    {
+                        new EIP.Tag() { Mapper = "TagBool", Name = "B3:0/2" },
+                        new EIP.Tag() { Mapper = "TagBool", Name = "B3:0/3" }
+                    };
+                });
+                
+                services.AddSingleton<IHostedService>(sp =>
+                    ActivatorUtilities.CreateInstance<EIP.ClientService>(sp, "bunker-micro")
+                );
+                
+                
                 // MQTT.ClientService -> wss.sharc.tech
                 
-                services.Configure<MQTT.ClientServiceOptions>("wss.sharc.tech", o =>
+                services.Configure<MQTT.ClientServiceOptions>("sharc-mqtt", o =>
                 {
+                    o.Name = "sharc-mqtt";
+                    o.Enabled = true;
                     o.BrokerAddress = "wss.sharc.tech";
                     o.BrokerPort = 1883;
                     o.UseTls = false;
@@ -28,14 +60,16 @@ class Program
                 });
                 
                 services.AddSingleton<IHostedService>(sp =>
-                    ActivatorUtilities.CreateInstance<MQTT.ClientService>(sp, "wss.sharc.tech")
+                    ActivatorUtilities.CreateInstance<MQTT.ClientService>(sp, "sharc-mqtt")
                 );
                 
                 
                 // MQTT.ClientService -> mosquitto.spb.mtcup.org
                 
-                services.Configure<MQTT.ClientServiceOptions>("mosquitto.spb.mtcup.org", o =>
+                services.Configure<MQTT.ClientServiceOptions>("mtcup-mqtt", o =>
                 {
+                    o.Name = "mtcup-mqtt";
+                    o.Enabled = false;
                     o.BrokerAddress = "mosquitto.spb.mtcup.org";
                     o.BrokerPort = 1884;
                     o.UseTls = false;
@@ -47,7 +81,7 @@ class Program
                 });
                 
                 services.AddSingleton<IHostedService>(sp =>
-                    ActivatorUtilities.CreateInstance<MQTT.ClientService>(sp, "mosquitto.spb.mtcup.org")
+                    ActivatorUtilities.CreateInstance<MQTT.ClientService>(sp, "mtcup-mqtt")
                 );
                 
                 
@@ -67,11 +101,16 @@ class Program
 
                 services.AddSingleton(sp => new TerminatorService.TerminatorServiceOptions()
                 {
-                    TerminateInMs = 10000   // 0 = do not terminate using timer
+                    TerminateInMs = 0   // 0 = do not terminate using timer
                 });
                 
                 addChannels(services);
                 
+            })
+            .ConfigureLogging((context, builder) =>
+            {
+                builder.ClearProviders();
+                builder.AddNLog(context.Configuration);
             })
             .RunConsoleAsync();
     }

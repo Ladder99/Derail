@@ -1,6 +1,6 @@
 namespace Derail.MQTT;
 
-public class ClientServiceOptions
+public class ClientServiceOptions: ServiceOptions
 {
     public string BrokerAddress { get; set; }
     public int BrokerPort { get; set; }

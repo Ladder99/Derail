@@ -8,8 +8,25 @@
     </PropertyGroup>
 
     <ItemGroup>
+      <PackageReference Include="IronPython" Version="3.4.1" />
+      <PackageReference Include="libplctag" Version="1.2.0" />
       <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
       <PackageReference Include="MQTTnet" Version="4.3.3.952" />
+      <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+      <PackageReference Include="NLog" Version="5.2.7" />
+      <PackageReference Include="NLog.Extensions.Hosting" Version="5.3.7" />
+      <PackageReference Include="NLog.Extensions.Logging" Version="5.3.7" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <None Remove="nlog.config" />
+      <Content Include="nlog.config">
+        <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      </Content>
+    </ItemGroup>
+
+    <ItemGroup>
+      <Folder Include="UDPClient\" />
     </ItemGroup>
 
 </Project>
