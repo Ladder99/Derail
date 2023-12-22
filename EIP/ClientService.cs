@@ -1,11 +1,8 @@
 ﻿using System.Threading.Channels;
-using libplctag.DataTypes.Simple;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using MQTTnet;
-using MQTTnet.Client;
-using MQTTnet.Protocol;
+using libplctag;
 
 namespace Derail.EIP;
 
@@ -18,7 +15,8 @@ public class ClientService: IHostedService
       private ChannelWriter<SystemControlFrame> _channelControlWriter;
       private ChannelWriter<SystemMessageFrame> _channelMessageWriter;
 
-      private List<libplctag.ITag> _tagCache = new();
+      private bool _isConnected = false;
+      private bool _enforceBackoff = false;
       
       private Task _task1;
       private CancellationTokenSource _tokenSource1;
@@ -38,6 +36,8 @@ public class ClientService: IHostedService
          _appLifetime = appLifetime;
          _channelControlWriter = channelSystemWriter;
          _channelMessageWriter = channelMessageWriter;
+         _isConnected = false;
+         _enforceBackoff = false;
       }
       
       public Task StartAsync(CancellationToken cancellationToken)
@@ -51,6 +51,8 @@ public class ClientService: IHostedService
             {
                try
                {
+                  await WriteOutboundControlFrame("STARTING");
+
                   if (_serviceOptions.Enabled)
                   {
                      CreateTags();
@@ -62,25 +64,30 @@ public class ClientService: IHostedService
                      {
                         await ReadTagsAsync();
                      }
-                     
-                     await Task.Delay(_serviceOptions.ReadInterval);
+
+                     await Task.Delay(_enforceBackoff ? _serviceOptions.BackoffOnTimeout : _serviceOptions.ReadInterval,
+                        _token1);
                   }
-                  
+
                   if (_serviceOptions.Enabled)
                   {
                      DestroyTags();
                   }
 
                }
+               catch (OperationCanceledException ocex)
+               {
+                  _logger.LogWarning("CLIENT Cancelled");
+               }
                catch (Exception ex)
                {
                   _logger.LogError(ex, "CLIENT ERROR");
-                  
                   await WriteOutboundControlFrame("ERROR", ex);
                }
                finally
                {
                   _logger.LogInformation("CLIENT Stopping");
+                  await WriteOutboundControlFrame("STOPPING");
                   _appLifetime.StopApplication();
                }
             }, _token1);
@@ -105,7 +112,7 @@ public class ClientService: IHostedService
          await _channelControlWriter.WriteAsync(new SystemControlFrame()
          {
             SourceInstanceId = _instanceId,
-            Payload = new { @event, data }
+            Payload = new { Event= @event, Data= data }
          });
       }
       
@@ -144,26 +151,63 @@ public class ClientService: IHostedService
                mapperInstance.PlcType = _serviceOptions.PlcType;
                mapperInstance.Protocol = _serviceOptions.Protocol;
                mapperInstance.Timeout = _serviceOptions.Timeout;
-               _tagCache.Add(mapperInstance);
+               tag.Instance = mapperInstance;
             }
          }
       }
       
       private async Task ReadTagsAsync()
       {
-         foreach (var tag in _tagCache)
+         foreach (var tag in _serviceOptions.Tags)
          {
-            // TODO: try-catch
-            var tagResponse = await tag.ReadAsync();
-            await WriteOutboundMessageFrame(new { Tag = tag.Name, Value = tagResponse });
+            if (!tag.Enabled)
+            {
+               continue;
+            }
+            
+            try
+            {
+               var tagResponse = await tag.Instance.ReadAsync(_token1);
+               
+               // TODO: no need to do this for every tag in loop
+               _enforceBackoff = false;
+               
+               // TODO: no need to do this for each tag in loop
+               if (_isConnected == false)
+               {
+                  _isConnected = true;
+                  await WriteOutboundControlFrame("CONNECTED");
+               }
+               
+               await WriteOutboundMessageFrame(new { Tag = tag.Name, Value = tagResponse });
+            }
+            catch (LibPlcTagException plcex)
+            {
+               _logger.LogWarning(plcex, $"Failed to read tag '{tag.Name}'.");
+
+               if (plcex.Message == "ErrorTimeout")
+               {
+                  _logger.LogWarning($"Breaking out of read loop.");
+                  _enforceBackoff = true;
+                  break;
+               }
+               else
+               {
+                  if (_serviceOptions.RemoveTagFromReadPoolOnError)
+                  {
+                     _logger.LogInformation($"Tag '{tag.Name}' removed from read pool.");
+                     tag.Enabled = false;
+                  }
+               }
+            }
          }
       }
 
       private void DestroyTags()
       {
-         foreach (var tag in _tagCache)
+         foreach (var tag in _serviceOptions.Tags)
          {
-            tag.Dispose();
+            tag.Instance.Dispose();
          }
       }
    }

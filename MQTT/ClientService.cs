@@ -50,8 +50,12 @@ public class ClientService: IHostedService
             {
                try
                {
-                  if(_serviceOptions.Enabled)
+                  await WriteOutboundControlFrame("STARTING");
+
+                  if (_serviceOptions.Enabled)
+                  {
                      await ConnectToBroker();
+                  }
                   
                   while (!_token1.IsCancellationRequested)
                   {
@@ -60,15 +64,19 @@ public class ClientService: IHostedService
 
                   await DisconnectFromBroker();
                }
+               catch (OperationCanceledException ocex)
+               {
+                  _logger.LogWarning("CLIENT Cancelled");
+               }
                catch (Exception ex)
                {
                   _logger.LogError(ex, "CLIENT ERROR");
-                  
                   await WriteOutboundControlFrame("ERROR", ex);
                }
                finally
                {
                   _logger.LogInformation("CLIENT Stopping");
+                  await WriteOutboundControlFrame("STOPPING");
                   _appLifetime.StopApplication();
                }
             }, _token1);
@@ -99,7 +107,7 @@ public class ClientService: IHostedService
          await _channelControlWriter.WriteAsync(new SystemControlFrame()
          {
             SourceInstanceId = _instanceId,
-            Payload = new { @event, data }
+            Payload = new { Event= @event, Data= data }
          });
       }
       
@@ -126,23 +134,26 @@ public class ClientService: IHostedService
          try
          {
             await WriteOutboundControlFrame("CONNECTING");
-            var response = await _client.ConnectAsync(mqttClientOptions, CancellationToken.None);
+            var response = await _client.ConnectAsync(mqttClientOptions, _token1);
             if (response.ResultCode == MqttClientConnectResultCode.Success)
             {
                var mqttSubscribeOptionsBuilder = new MqttFactory().CreateSubscribeOptionsBuilder();
                foreach (var subscriptionTopic in _serviceOptions.SubscriptionTopics)
                {
-                  mqttSubscribeOptionsBuilder.WithTopicFilter(subscriptionTopic, MqttQualityOfServiceLevel.AtMostOnce);
+                  if (subscriptionTopic.Enabled)
+                  {
+                     mqttSubscribeOptionsBuilder.WithTopicFilter(subscriptionTopic.Topic, MqttQualityOfServiceLevel.AtMostOnce);
+                  }
                }
                var mqttSubscribeOptions = mqttSubscribeOptionsBuilder.Build();
                   
-               await _client.SubscribeAsync(mqttSubscribeOptions, CancellationToken.None);
+               await _client.SubscribeAsync(mqttSubscribeOptions, _token1);
                await WriteOutboundControlFrame("CONNECTED");
             }
          }
-         catch (Exception e)
+         catch (Exception ex)
          {
-            
+            _logger.LogWarning(ex, $"Failed to connect to broker.");
          }
       }
 
@@ -152,7 +163,7 @@ public class ClientService: IHostedService
          {
             await WriteOutboundControlFrame("DISCONNECTING");
             _client.DisconnectedAsync -= ClientOnDisconnectedAsync;
-            await _client.DisconnectAsync();
+            await _client.DisconnectAsync(cancellationToken: _token1);
          }
 
          await WriteOutboundControlFrame("DISCONNECTED");
@@ -161,7 +172,7 @@ public class ClientService: IHostedService
       private async Task ClientOnDisconnectedAsync(MqttClientDisconnectedEventArgs arg)
       {
          await WriteOutboundControlFrame("DISCONNECTED");
-         await Task.Delay(_serviceOptions.ReconnectInterval);
+         await Task.Delay(_serviceOptions.ReconnectInterval, _token1);
          await ConnectToBroker();
       }
       

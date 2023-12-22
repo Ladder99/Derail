@@ -8,6 +8,8 @@
     </PropertyGroup>
 
     <ItemGroup>
+      <PackageReference Include="ChoETL" Version="1.2.1.64" />
+      <PackageReference Include="ChoETL.Yaml" Version="1.0.0.35" />
       <PackageReference Include="IronPython" Version="3.4.1" />
       <PackageReference Include="libplctag" Version="1.2.0" />
       <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
@@ -16,6 +18,7 @@
       <PackageReference Include="NLog" Version="5.2.7" />
       <PackageReference Include="NLog.Extensions.Hosting" Version="5.3.7" />
       <PackageReference Include="NLog.Extensions.Logging" Version="5.3.7" />
+      <PackageReference Include="YamlDotNet" Version="13.7.1" />
     </ItemGroup>
 
     <ItemGroup>
@@ -23,10 +26,10 @@
       <Content Include="nlog.config">
         <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       </Content>
-    </ItemGroup>
-
-    <ItemGroup>
-      <Folder Include="UDPClient\" />
+      <None Remove="config.yml" />
+      <Content Include="config.yml">
+        <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      </Content>
     </ItemGroup>
 
 </Project>

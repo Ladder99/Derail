@@ -9,5 +9,11 @@ public class ClientServiceOptions: ServiceOptions
     public string Password { get; set; }
     public bool UseTls { get; set; }
     public TimeSpan ReconnectInterval { get; set; }
-    public List<string> SubscriptionTopics { get; set; }
+    public List<SubscriptionTopic> SubscriptionTopics { get; set; }
+}
+
+public class SubscriptionTopic
+{
+    public bool Enabled { get; set; }
+    public string Topic { get; set; }
 }

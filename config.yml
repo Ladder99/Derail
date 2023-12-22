@@ -1,0 +1,64 @@
+Host: ~
+
+Service:
+  - Id: eip1
+    Name: bunker-micro
+    InstanceType: Derail.EIP.ClientService, Derail
+    OptionsType: Derail.EIP.ClientServiceOptions, Derail
+    
+    Derail.EIP.ClientServiceOptions, Derail:
+      Enabled: true
+      Gateway: 192.168.111.20
+      Protocol: Protocol.ab_eip
+      PlcType: PlcType.MicroLogix
+      Timeout: 5000
+      ReadInterval: 1000
+      BackoffOnTimeout: 60000
+      RemoveTagFromReadPoolOnError: false
+      Tags:
+        - Id: eip1-1
+          Enabled: true
+          Mapper: TagBool
+          Name: B3:0/2
+        - Id: eip1-2
+          Enabled: true
+          Mapper: TagBool
+          Name: B3:0/3
+
+  - Id: mqtt1
+    Name: sharc-mqtt
+    InstanceType: Derail.MQTT.ClientService, Derail
+    OptionsType: Derail.MQTT.ClientServiceOptions, Derail
+    
+    Derail.MQTT.ClientServiceOptions, Derail:
+      Enabled: true
+      BrokerAddress: wss.sharc.tech
+      BrokerPort: 1883
+      UseTls: false
+      Username: ~
+      Password: ~
+      ClientId: ~
+      ReconnectInterval: 10000
+      SubscriptionTopics:
+        - Id: mqtt1-1
+          Enabled: true
+          Topic: sharc/+/evt/#
+          
+  - Id: mqtt2
+    Name: mtcup-mqtt
+    InstanceType: Derail.MQTT.ClientService, Derail
+    OptionsType: Derail.MQTT.ClientServiceOptions, Derail
+    
+    Derail.MQTT.ClientServiceOptions, Derail:
+      Enabled: true
+      BrokerAddress: mosquitto.spb.mtcup.org
+      BrokerPort: 1884
+      UseTls: false
+      Username: ~
+      Password: ~
+      ClientId: ~
+      ReconnectInterval: 10000
+      SubscriptionTopics:
+        - Id: mqtt1-1
+          Enabled: true
+          Topic: #

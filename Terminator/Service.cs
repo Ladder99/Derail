@@ -1,39 +1,34 @@
-﻿namespace Derail;
-
-using System;
-using System.Threading;
-using System.Threading.Channels;
-using System.Threading.Tasks;
+﻿using System.Threading.Channels;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
-public class TerminatorService : IHostedService
+namespace Derail.Terminator;
+
+public class Service : IHostedService
 {
-    public class TerminatorServiceOptions
-    {
-        public int TerminateInMs
-        {
-            get;
-            set;
-        }
-    }
-    
+    private readonly string _instanceId;
+    private readonly ServiceOptions _serviceOptions;
+    private readonly ILogger<Service> _logger;
     private readonly IHostApplicationLifetime _appLifetime;
-    private readonly TerminatorServiceOptions _options;
-    
-    private ChannelReader<bool> _tsInChannelReader;
+    private ChannelReader<bool> _terminatorChannelReader;
       
     private Task _task1;
     private CancellationTokenSource _tokenSource1;
     private CancellationToken _token1;
     
-    public TerminatorService(
+    public Service(
+        string instanceId,
+        IOptionsMonitor<ServiceOptions> optionsMonitor,
+        ILogger<Service> logger,
         IHostApplicationLifetime appLifetime,
-        TerminatorServiceOptions options,
-        ChannelReader<bool> tsInChannelReader)
+        ChannelReader<bool> terminatorChannelReader)
     {
+        _instanceId = instanceId;
+        _serviceOptions = optionsMonitor.Get(instanceId);
+        _logger = logger;
         _appLifetime = appLifetime;
-        _options = options;
-        _tsInChannelReader = tsInChannelReader;
+        _terminatorChannelReader = terminatorChannelReader;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -47,15 +42,15 @@ public class TerminatorService : IHostedService
             {
                 try
                 {
-                    if (_options.TerminateInMs > 0)
+                    if (_serviceOptions.TerminateInMs > 0)
                     {
-                        await Task.Delay(_options.TerminateInMs);
+                        await Task.Delay(_serviceOptions.TerminateInMs);
                     }
                     else
                     {
-                        while (await _tsInChannelReader.WaitToReadAsync(_token1))
+                        while (await _terminatorChannelReader.WaitToReadAsync(_token1))
                         {
-                            await foreach (var frame in _tsInChannelReader.ReadAllAsync(_token1))
+                            await foreach (var frame in _terminatorChannelReader.ReadAllAsync(_token1))
                             {
                                 await Task.Yield();
                             }
@@ -64,16 +59,15 @@ public class TerminatorService : IHostedService
                 }
                 catch (OperationCanceledException ocex)
                 {
-                    Console.WriteLine("TerminatorService CHANNEL_READER Cancelled");
+                    _logger.LogWarning("CHANNEL_READER Cancelled");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine("TerminatorService CHANNEL_READER ERROR");
-                    Console.WriteLine(ex);
+                    _logger.LogError(ex, "CHANNEL_READER ERROR");
                 }
                 finally
                 {
-                    Console.WriteLine("TerminatorService CHANNEL_READER Stopping");
+                    _logger.LogInformation("CHANNEL_READER Stopping");
                     _appLifetime.StopApplication();
                 }
             });
@@ -84,7 +78,7 @@ public class TerminatorService : IHostedService
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
-        Console.WriteLine("TerminatorService Stop");
+        _logger.LogInformation("Stop");
         
         _tokenSource1.Cancel();
         Task.WaitAll(_task1);

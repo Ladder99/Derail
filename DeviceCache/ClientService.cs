@@ -1,30 +1,36 @@
-﻿using System.Net;
-using System.Net.Sockets;
-using System.Text;
-using System.Threading.Channels;
+﻿using System.Threading.Channels;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
 
 namespace Derail.DeviceCache;
 
 public class ClientService: IHostedService
    {
+      private readonly string _instanceId;
       private readonly IHostApplicationLifetime _appLifetime;
       private readonly ILogger<ClientService> _logger;
+      private ChannelReader<SystemControlFrame> _channelControlReader;
       private ChannelReader<SystemMessageFrame> _channelMessageReader;
       
       private Task _task1;
       private CancellationTokenSource _tokenSource1;
       private CancellationToken _token1;
       
+      private Task _task2;
+      private CancellationTokenSource _tokenSource2;
+      private CancellationToken _token2;
+      
       public ClientService(
-         IHostApplicationLifetime appLifetime,
+         string instanceId,
          ILogger<ClientService> logger,
+         IHostApplicationLifetime appLifetime,
+         ChannelReader<SystemControlFrame> channelControlReader,
          ChannelReader<SystemMessageFrame> channelMessageReader)
       {
-         _appLifetime = appLifetime;
+         _instanceId = instanceId;
          _logger = logger;
+         _appLifetime = appLifetime;
+         _channelControlReader = channelControlReader;
          _channelMessageReader = channelMessageReader;
       }
       
@@ -35,6 +41,9 @@ public class ClientService: IHostedService
             _tokenSource1 = new CancellationTokenSource();
             _token1 = _tokenSource1.Token;
             
+            _tokenSource2 = new CancellationTokenSource();
+            _token2 = _tokenSource1.Token;
+            
             _task1 = Task.Run(async () =>
             {
                try
@@ -43,24 +52,51 @@ public class ClientService: IHostedService
                   {
                      await foreach (var frame in _channelMessageReader.ReadAllAsync(_token1))
                      {
-                        await ProcessInboundFrame(frame);
+                        await ProcessInboundMessageFrame(frame);
                      }
                   }
                }
                catch (OperationCanceledException ocex)
                {
-                  _logger.LogWarning("CHANNEL_READER Cancelled");
+                  _logger.LogWarning("MESSAGE_CHANNEL_READER Cancelled");
                }
                catch (Exception ex)
                {
-                  _logger.LogError(ex, "CHANNEL_READER ERROR");
+                  _logger.LogError(ex, "MESSAGE_CHANNEL_READER ERROR");
                }
                finally
                {
-                  _logger.LogInformation("CHANNEL_READER Stopping");
+                  _logger.LogInformation("MESSAGE_CHANNEL_READER Stopping");
                   _appLifetime.StopApplication();
                }
             }, _token1);
+            
+            _task2 = Task.Run(async () =>
+            {
+               try
+               {
+                  while (await _channelControlReader.WaitToReadAsync(_token2))
+                  {
+                     await foreach (var frame in _channelControlReader.ReadAllAsync(_token2))
+                     {
+                        await ProcessInboundControlFrame(frame);
+                     }
+                  }
+               }
+               catch (OperationCanceledException ocex)
+               {
+                  _logger.LogWarning("CONTROL_CHANNEL_READER Cancelled");
+               }
+               catch (Exception ex)
+               {
+                  _logger.LogError(ex, "CONTROL_CHANNEL_READER ERROR");
+               }
+               finally
+               {
+                  _logger.LogInformation("CONTROL_CHANNEL_READER Stopping");
+                  _appLifetime.StopApplication();
+               }
+            }, _token2);
          });
 
          return Task.CompletedTask;
@@ -71,23 +107,19 @@ public class ClientService: IHostedService
          _logger.LogInformation("Stop");
          
          _tokenSource1.Cancel();
-         Task.WaitAll(_task1);
+         _tokenSource2.Cancel();
+         Task.WaitAll(_task1, _task2);
          
          return Task.CompletedTask;
       }
 
-      private async Task ProcessInboundFrame(SystemMessageFrame frame)
+      private async Task ProcessInboundMessageFrame(SystemMessageFrame frame)
       { 
-         Console.WriteLine($"DeviceService Receive Frame: [{frame.TimestampCreated},{frame.SourceInstanceId}] {frame.Payload}");
-         
-        /*
-         var client = new UdpClient();
-         IPEndPoint ep = new IPEndPoint(IPAddress.Parse("127.0.0.1"), 9870);
-         client.Connect(ep);
-         //var ps = Encoding.UTF8.GetString(frame.Payload.PayloadSegment);
-         //var jj = JsonConvert.SerializeObject(frame.Payload.PayloadSegment);
-         //Console.WriteLine(ps);
-         await client.SendAsync(frame.Payload.PayloadSegment.Array);
-         */
+         _logger.LogDebug($"Receive Message Frame: [{frame.TimestampCreated},{frame.SourceInstanceId}] {frame.Payload}");
+      }
+      
+      private async Task ProcessInboundControlFrame(SystemControlFrame frame)
+      { 
+         _logger.LogDebug($"Receive Control Frame: [{frame.TimestampCreated},{frame.SourceInstanceId}] {frame.Payload}");
       }
    }
